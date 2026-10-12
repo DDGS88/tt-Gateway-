@@ -37,8 +37,6 @@ import {
   deleteErrorScanRule,
   toggleErrorScanAlert,
   toggleErrorScanSuppressed,
-  updateErrorScanFeishu,
-  bulkUpdateErrorScanFeishu,
   updateErrorScanGranularity,
   updateErrorScanThresholdExcludes,
   updateErrorScanRule,
@@ -261,26 +259,6 @@ export default function App() {
     }
   };
 
-  const handleUpdateFeishuWebhookUrl = async (id: string, url: string) => {
-    try {
-      await updateErrorScanFeishu(id, url);
-      await loadErrorScanRules();
-      showToast('飞书地址已更新');
-    } catch (err: any) {
-      showToast(`操作失败: ${err.message}`);
-    }
-  };
-
-  const handleBulkUpdateFeishuWebhookUrl = async (url: string) => {
-    try {
-      await bulkUpdateErrorScanFeishu(url);
-      await loadErrorScanRules();
-      showToast(`已成功同步覆盖全量规则的飞书地址`);
-    } catch (err: any) {
-      showToast(`操作失败: ${err.message}`);
-    }
-  };
-
   const handleDeleteScanCategory = async (id: string) => {
     try {
       await deleteErrorScanRule(id);
@@ -400,8 +378,6 @@ export default function App() {
           onAddScanCategory={handleAddScanCategory}
           onDeleteScanCategory={handleDeleteScanCategory}
           onUpdateScanCategory={handleUpdateScanCategory}
-          onUpdateFeishuWebhookUrl={handleUpdateFeishuWebhookUrl}
-          onBulkUpdateFeishuWebhookUrl={handleBulkUpdateFeishuWebhookUrl}
           onShowToast={showToast}
           onSyncScanCategoryFromClassify={handleSyncScanCategoryFromClassify}
           onUpdatePatternKeyword={handleUpdatePatternKeyword}

@@ -1,0 +1,28 @@
+# 前端
+ai-gateway-console/node_modules/
+ai-gateway-console/dist/
+
+# 后端
+tt-inspector
+tt-inspector.exe
+*.exe
+
+# 数据
+data/
+veridrop-data/
+*.db
+*.sqlite
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 环境配置（含密钥/密码，不要提交）
+config/config.prod.yaml
+config/config.local.yaml
+*.env

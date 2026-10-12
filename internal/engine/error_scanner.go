@@ -30,7 +30,8 @@ type ErrorScanner struct {
 	logStore        *store.LogStore
 	scanStore       *store.ErrorScanStore
 	channelStore    *store.ChannelStore
-	notifier        notifier.Notifier
+	notifier        notifier.Notifier           // webhook 通知器，仅兜底告警使用
+	appNotifier     *notifier.FeishuAppNotifier // 飞书自建应用通知器，日志告警统一走 app 模式
 	logger          *zap.Logger
 	pollInterval    time.Duration
 	intervalMu      sync.RWMutex
@@ -45,8 +46,8 @@ type ErrorScanner struct {
 	// 全局告警@用户
 	alertAtUsers []string
 	atUsersMu    sync.RWMutex
-	// 全局 webhook URL
-	globalWebhookURL string
+	// 飞书自建应用配置（app 模式全局配置）
+	feishuApp notifier.FeishuAppConfig
 }
 
 // NewErrorScanner 创建错误扫描器
@@ -55,6 +56,7 @@ func NewErrorScanner(
 	scanStore *store.ErrorScanStore,
 	channelStore *store.ChannelStore,
 	notifier notifier.Notifier,
+	appNotifier *notifier.FeishuAppNotifier,
 	logger *zap.Logger,
 	pollInterval time.Duration,
 	cooldownSeconds int,
@@ -65,14 +67,21 @@ func NewErrorScanner(
 		scanStore:       scanStore,
 		channelStore:    channelStore,
 		notifier:        notifier,
+		appNotifier:     appNotifier,
 		logger:          logger,
 		pollInterval:    pollInterval,
 		cooldowns:       make(map[int64]map[string]time.Time),
 		cooldownSeconds: cooldownSeconds,
 	}
 	// 加载持久化的全局配置
-	if webhook, _ := scanStore.GetSetting("global_webhook_url"); webhook != "" {
-		s.globalWebhookURL = webhook
+	if appID, _ := scanStore.GetSetting("feishu_app_id"); appID != "" {
+		s.feishuApp.AppID = appID
+	}
+	if appSecret, _ := scanStore.GetSetting("feishu_app_secret"); appSecret != "" {
+		s.feishuApp.AppSecret = appSecret
+	}
+	if chatID, _ := scanStore.GetSetting("feishu_chat_id"); chatID != "" {
+		s.feishuApp.ChatID = chatID
 	}
 	if usersStr, _ := scanStore.GetSetting("alert_at_users"); usersStr != "" {
 		s.alertAtUsers = strings.Split(usersStr, ",")
@@ -154,21 +163,23 @@ func (s *ErrorScanner) GetAlertAtUsers() []string {
 	return s.alertAtUsers
 }
 
-// SetGlobalWebhookURL 设置全局 webhook URL
-func (s *ErrorScanner) SetGlobalWebhookURL(url string) {
+// SetFeishuAppConfig 设置飞书自建应用配置（app 模式全局配置），并持久化
+func (s *ErrorScanner) SetFeishuAppConfig(cfg notifier.FeishuAppConfig) {
 	s.atUsersMu.Lock()
 	defer s.atUsersMu.Unlock()
-	s.globalWebhookURL = url
+	s.feishuApp = cfg
 	if s.scanStore != nil {
-		_ = s.scanStore.SetSetting("global_webhook_url", url)
+		_ = s.scanStore.SetSetting("feishu_app_id", cfg.AppID)
+		_ = s.scanStore.SetSetting("feishu_app_secret", cfg.AppSecret)
+		_ = s.scanStore.SetSetting("feishu_chat_id", cfg.ChatID)
 	}
 }
 
-// GetGlobalWebhookURL 获取全局 webhook URL
-func (s *ErrorScanner) GetGlobalWebhookURL() string {
+// GetFeishuAppConfig 获取飞书自建应用配置
+func (s *ErrorScanner) GetFeishuAppConfig() notifier.FeishuAppConfig {
 	s.atUsersMu.RLock()
 	defer s.atUsersMu.RUnlock()
-	return s.globalWebhookURL
+	return s.feishuApp
 }
 
 // checkFallbackAlert 检查是否需要发送兜底告警
@@ -178,7 +189,7 @@ func (s *ErrorScanner) checkFallbackAlert() {
 	webhook := s.fallbackWebhook
 	s.fallbackMu.RUnlock()
 
-	if !enabled || webhook == "" {
+	if !enabled {
 		return
 	}
 
@@ -213,36 +224,54 @@ func (s *ErrorScanner) checkFallbackAlert() {
 			Condition:   "type=5 未命中任何规则",
 			Description: fmt.Sprintf("当前有 %d 条 type=5 错误日志未被任何精细化规则覆盖，总匹配率 %.1f%%，请及时添加规则",
 				stats.UnmatchedErrors, stats.MatchRate),
-			AtUsers: s.GetAlertAtUsers(),
 		}
 
-		if err := s.notifier.Send(webhook, msg); err != nil {
+		// 填写了独立 Webhook：走 webhook 通道单独发送（不 @ 用户）
+		if webhook != "" {
+			if err := s.notifier.Send(webhook, msg); err != nil {
+				s.logger.Error("fallback alert failed", zap.Error(err))
+			} else {
+				s.logger.Warn("fallback alert sent",
+					zap.Int64("unmatched", stats.UnmatchedErrors),
+					zap.Float64("match_rate", stats.MatchRate))
+			}
+			return
+		}
+
+		// 未填写 Webhook：按默认方式走飞书应用（app 模式）告警
+		cfg := s.GetFeishuAppConfig()
+		if cfg.ChatID == "" {
+			s.logger.Warn("fallback alert skipped: no fallback webhook and feishu app chat_id empty")
+			return
+		}
+		msg.AtUsers = s.GetAlertAtUsers()
+		if err := s.appNotifier.SendCard(cfg, msg); err != nil {
 			s.logger.Error("fallback alert failed", zap.Error(err))
 		} else {
-			s.logger.Warn("fallback alert sent",
+			s.logger.Warn("fallback alert sent via feishu app",
 				zap.Int64("unmatched", stats.UnmatchedErrors),
 				zap.Float64("match_rate", stats.MatchRate))
 		}
 	}
 }
 
-// TestWebhook 测试飞书 webhook 是否可用
-func (s *ErrorScanner) TestWebhook(webhookURL string) error {
+// TestFeishuApp 测试飞书自建应用配置是否可用（app 模式发送测试卡片）
+func (s *ErrorScanner) TestFeishuApp(cfg notifier.FeishuAppConfig) error {
 	msg := notifier.AlertMessage{
-		RuleName:    "[错误扫描] Webhook 连通性测试",
+		RuleName:    "[错误扫描] 飞书应用连通性测试",
 		RuleType:    "测试",
 		MatchCount:  0,
 		Threshold:   0,
 		WindowStart: time.Now(),
 		WindowEnd:   time.Now(),
 		Condition:   "手动测试",
-		Description: "这是一条来自 tt-inspector 错误扫描的飞书机器人连通性测试消息，如果你收到此消息说明配置正确。",
+		Description: "这是一条来自 tt-inspector 错误扫描的飞书应用机器人连通性测试消息，如果你收到此消息说明配置正确。",
 		AtUsers:     s.GetAlertAtUsers(),
 	}
-	err := s.notifier.Send(webhookURL, msg)
+	err := s.appNotifier.SendCard(cfg, msg)
 	if err != nil {
-		s.logger.Error("webhook test failed",
-			zap.String("url", truncateURL(webhookURL)),
+		s.logger.Error("feishu app test failed",
+			zap.String("app_id", truncateURL(cfg.AppID)),
 			zap.Error(err))
 	}
 	return err
@@ -319,8 +348,7 @@ func (s *ErrorScanner) scanRulesInMemory(rules []*store.ErrorScanRule, windowSta
 				zap.String("name", rule.Name),
 				zap.String("keyword", rule.PatternKeyword),
 				zap.Int("count", totalCount),
-				zap.Int("threshold", rule.AlertThreshold),
-				zap.String("webhook", truncateURL(rule.FeishuWebhook)))
+				zap.Int("threshold", rule.AlertThreshold))
 
 			s.updateCounts(rule, totalCount)
 
@@ -443,10 +471,10 @@ func (s *ErrorScanner) updateCounts(rule *store.ErrorScanRule, count int) {
 	}
 }
 
-// sendAlert 发送不分组告警
+// sendAlert 发送不分组告警（app 模式，发送到全局配置的飞书群）
 func (s *ErrorScanner) sendAlert(rule *store.ErrorScanRule, groupValue string, count int, windowStart, windowEnd int64) {
-	webhookURL := rule.FeishuWebhook
-	if webhookURL == "" {
+	cfg := s.GetFeishuAppConfig()
+	if cfg.ChatID == "" {
 		return
 	}
 
@@ -488,7 +516,7 @@ func (s *ErrorScanner) sendAlert(rule *store.ErrorScanRule, groupValue string, c
 		}
 	}
 
-	if err := s.notifier.Send(webhookURL, msg); err != nil {
+	if err := s.appNotifier.SendCard(cfg, msg); err != nil {
 		s.logger.Error("send error alert failed",
 			zap.Int64("rule_id", rule.Id), zap.Error(err))
 		return
@@ -500,10 +528,10 @@ func (s *ErrorScanner) sendAlert(rule *store.ErrorScanRule, groupValue string, c
 		zap.Int("count", count))
 }
 
-// sendGroupAlert 发送分组告警
+// sendGroupAlert 发送分组告警（app 模式，发送到全局配置的飞书群）
 func (s *ErrorScanner) sendGroupAlert(rule *store.ErrorScanRule, groupValue string, count int, windowStart, windowEnd int64) {
-	webhookURL := rule.FeishuWebhook
-	if webhookURL == "" {
+	cfg := s.GetFeishuAppConfig()
+	if cfg.ChatID == "" {
 		return
 	}
 
@@ -545,7 +573,7 @@ func (s *ErrorScanner) sendGroupAlert(rule *store.ErrorScanRule, groupValue stri
 		}
 	}
 
-	if err := s.notifier.Send(webhookURL, msg); err != nil {
+	if err := s.appNotifier.SendCard(cfg, msg); err != nil {
 		s.logger.Error("send group error alert failed",
 			zap.Int64("rule_id", rule.Id),
 			zap.String("group_value", groupValue),

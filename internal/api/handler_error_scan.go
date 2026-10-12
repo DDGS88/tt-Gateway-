@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"tt-inspector/internal/engine"
+	"tt-inspector/internal/notifier"
 	"tt-inspector/internal/store"
 
 	"github.com/gin-gonic/gin"
@@ -140,48 +141,6 @@ func (h *ErrorScanHandler) ToggleSuppressed(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "ok"})
 }
 
-func (h *ErrorScanHandler) UpdateFeishuWebhook(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
-		return
-	}
-
-	var body struct {
-		URL string `json:"url"`
-	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	if err := h.store.SetFeishuWebhook(id, body.URL); err != nil {
-		h.logger.Error("update feishu webhook failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "ok"})
-}
-
-func (h *ErrorScanHandler) BulkUpdateFeishuWebhook(c *gin.Context) {
-	var body struct {
-		URL string `json:"url"`
-	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	if err := h.store.BulkSetFeishuWebhook(body.URL); err != nil {
-		h.logger.Error("bulk update feishu webhook failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "ok"})
-}
-
 func (h *ErrorScanHandler) UpdateGranularity(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -256,24 +215,22 @@ func (h *ErrorScanHandler) SetPollInterval(c *gin.Context) {
 }
 
 func (h *ErrorScanHandler) TestWebhook(c *gin.Context) {
-	var body struct {
-		WebhookURL string `json:"webhook_url"`
-	}
+	var body notifier.FeishuAppConfig
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if body.WebhookURL == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "webhook_url is required"})
+	if body.AppID == "" || body.AppSecret == "" || body.ChatID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "app_id, app_secret, chat_id are required"})
 		return
 	}
 
-	err := h.scanner.TestWebhook(body.WebhookURL)
+	err := h.scanner.TestFeishuApp(body)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "webhook sent successfully"})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "test card sent successfully"})
 }
 
 func (h *ErrorScanHandler) TriggerScan(c *gin.Context) {
@@ -537,21 +494,19 @@ func (h *ErrorScanHandler) SetAlertAtUsers(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": body.Users})
 }
 
-func (h *ErrorScanHandler) GetGlobalWebhookURL(c *gin.Context) {
-	url := h.scanner.GetGlobalWebhookURL()
-	c.JSON(http.StatusOK, gin.H{"data": url})
+func (h *ErrorScanHandler) GetFeishuAppConfig(c *gin.Context) {
+	cfg := h.scanner.GetFeishuAppConfig()
+	c.JSON(http.StatusOK, gin.H{"data": cfg})
 }
 
-func (h *ErrorScanHandler) SetGlobalWebhookURL(c *gin.Context) {
-	var body struct {
-		URL string `json:"url"`
-	}
+func (h *ErrorScanHandler) SetFeishuAppConfig(c *gin.Context) {
+	var body notifier.FeishuAppConfig
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	h.scanner.SetGlobalWebhookURL(body.URL)
-	c.JSON(http.StatusOK, gin.H{"data": body.URL})
+	h.scanner.SetFeishuAppConfig(body)
+	c.JSON(http.StatusOK, gin.H{"message": "ok"})
 }
 
 func (h *ErrorScanHandler) GetGroupedStats(c *gin.Context) {

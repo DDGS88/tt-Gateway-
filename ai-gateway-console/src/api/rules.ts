@@ -334,20 +334,6 @@ export async function toggleErrorScanSuppressed(id: string): Promise<void> {
   await request(`/error-scan/${id}/toggle-suppressed`, { method: 'POST' });
 }
 
-export async function updateErrorScanFeishu(id: string, url: string): Promise<void> {
-  await request(`/error-scan/${id}/feishu-webhook`, {
-    method: 'POST',
-    body: JSON.stringify({ url }),
-  });
-}
-
-export async function bulkUpdateErrorScanFeishu(url: string): Promise<void> {
-  await request('/error-scan/bulk-feishu-webhook', {
-    method: 'POST',
-    body: JSON.stringify({ url }),
-  });
-}
-
 export async function updateErrorScanGranularity(
   id: string,
   scanGranularity: string,
@@ -389,10 +375,18 @@ export async function setErrorScanPollInterval(seconds: number): Promise<void> {
   });
 }
 
-export async function testErrorScanWebhook(webhookUrl: string): Promise<{ success: boolean; error?: string }> {
+export interface FeishuAppConfig {
+  app_id: string;
+  app_secret: string;
+  chat_id: string;
+}
+
+export async function testErrorScanFeishuApp(
+  config: FeishuAppConfig,
+): Promise<{ success: boolean; error?: string }> {
   const res = await request<{ success: boolean; error?: string }>('/error-scan/test-webhook', {
     method: 'POST',
-    body: JSON.stringify({ webhook_url: webhookUrl }),
+    body: JSON.stringify(config),
   });
   return res;
 }
@@ -486,15 +480,15 @@ export async function setAlertAtUsers(users: string[]): Promise<void> {
   });
 }
 
-export async function getGlobalWebhookURL(): Promise<string> {
-  const res = await request<{ data: string }>('/error-scan/global-webhook');
+export async function getFeishuAppConfig(): Promise<FeishuAppConfig> {
+  const res = await request<{ data: FeishuAppConfig }>('/error-scan/feishu-app-config');
   return res.data;
 }
 
-export async function setGlobalWebhookURL(url: string): Promise<void> {
-  await request('/error-scan/global-webhook', {
+export async function setFeishuAppConfig(config: FeishuAppConfig): Promise<void> {
+  await request('/error-scan/feishu-app-config', {
     method: 'POST',
-    body: JSON.stringify({ url }),
+    body: JSON.stringify(config),
   });
 }
 

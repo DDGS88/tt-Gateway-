@@ -124,9 +124,10 @@ func Run(cfg *config.Config) error {
 	channelStore := store.NewChannelStore(businessDB)
 	probeStore := store.NewProbeStore(logDB)
 	feishuNotifier := notifier.NewFeishuNotifier(logger)
+	feishuAppNotifier := notifier.NewFeishuAppNotifier(logger)
 	alertEngine := engine.NewEngine(logDB, ruleStore, logStore, feishuNotifier, cfg.Engine, logger)
 
-	errorScanner := engine.NewErrorScanner(logDB, errorScanStore, channelStore, feishuNotifier, logger,
+	errorScanner := engine.NewErrorScanner(logDB, errorScanStore, channelStore, feishuNotifier, feishuAppNotifier, logger,
 		cfg.Engine.ErrorScanPollInterval, cfg.Engine.DefaultCooldownSec)
 
 	// 渠道探测（可用性 + 质量）

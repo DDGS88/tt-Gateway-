@@ -9,7 +9,7 @@ import {
 import {
   getErrorScanPollInterval,
   setErrorScanPollInterval,
-  testErrorScanWebhook,
+  testErrorScanFeishuApp,
   getRecentErrorSamples,
   getOverviewStats,
   getUnmatchedSamples,
@@ -18,8 +18,8 @@ import {
   setFallbackConfig,
   getAlertAtUsers,
   setAlertAtUsers,
-  getGlobalWebhookURL,
-  setGlobalWebhookURL,
+  getFeishuAppConfig,
+  setFeishuAppConfig,
   getGroupedStats,
   getGroupedSamples,
   classifyLog,
@@ -57,8 +57,6 @@ interface ErrorScanAlertsViewProps {
   onAddScanCategory: (category: Omit<ErrorScanCategory, 'id' | 'lastScannedTime'>) => void;
   onDeleteScanCategory: (id: string) => void;
   onUpdateScanCategory?: (id: string, updates: Partial<ErrorScanCategory>) => void;
-  onUpdateFeishuWebhookUrl?: (id: string, url: string) => void;
-  onBulkUpdateFeishuWebhookUrl?: (url: string) => void;
   onShowToast: (msg: string) => void;
   onSyncScanCategoryFromClassify?: (patternKeyword: string, updates: { subCategory?: string; category?: string }) => void;
   onUpdatePatternKeyword?: (id: string, patternKeyword: string) => void;
@@ -156,8 +154,6 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
   onAddScanCategory,
   onDeleteScanCategory,
   onUpdateScanCategory,
-  onUpdateFeishuWebhookUrl,
-  onBulkUpdateFeishuWebhookUrl,
   onShowToast,
   onSyncScanCategoryFromClassify,
   onUpdatePatternKeyword,
@@ -167,11 +163,11 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
   const [globalScanGranularity, setGlobalScanGranularity] = useState<ScanGranularity>('小时 (Hourly)');
   const [globalAlertGranularity, setGlobalAlertGranularity] = useState<AlertGranularity>('按错误精细类型');
   const [minAlertThreshold, setMinAlertThreshold] = useState<number>(5);
-  const [globalFeishuUrl, setGlobalFeishuUrl] = useState<string>('');
 
-  // Feishu Webhook Rule Edit Modal State
-  const [editingFeishuCategory, setEditingFeishuCategory] = useState<ErrorScanCategory | null>(null);
-  const [editingFeishuUrlInput, setEditingFeishuUrlInput] = useState<string>('');
+  // 飞书自建应用配置（app 模式全局配置）
+  const [feishuAppId, setFeishuAppId] = useState('');
+  const [feishuAppSecret, setFeishuAppSecret] = useState('');
+  const [feishuChatId, setFeishuChatId] = useState('');
 
   // Rule Edit Modal State
   const [editingScanCategory, setEditingScanCategory] = useState<ErrorScanCategory | null>(null);
@@ -324,9 +320,11 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
         setAtUsersInput((users || []).join(', '));
       })
       .catch(() => {});
-    getGlobalWebhookURL()
-      .then((url) => {
-        if (url) setGlobalFeishuUrl(url);
+    getFeishuAppConfig()
+      .then((cfg) => {
+        setFeishuAppId(cfg.app_id || '');
+        setFeishuAppSecret(cfg.app_secret || '');
+        setFeishuChatId(cfg.chat_id || '');
       })
       .catch(() => {});
   }, []);
@@ -424,30 +422,6 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
     }
   };
 
-  // 快捷 Webhook 预设（localStorage 持久化）
-  const [savedWebhooks, setSavedWebhooks] = useState<{ label: string; url: string }[]>(() => {
-    try {
-      const saved = localStorage.getItem('errorScanWebhookPresets');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const saveWebhookPreset = (label: string, url: string) => {
-    if (!label || !url) return;
-    const updated = [...savedWebhooks.filter(w => w.url !== url), { label, url }];
-    setSavedWebhooks(updated);
-    localStorage.setItem('errorScanWebhookPresets', JSON.stringify(updated));
-    onShowToast(`已保存快捷 Webhook: ${label}`);
-  };
-
-  const removeWebhookPreset = (url: string) => {
-    const updated = savedWebhooks.filter(w => w.url !== url);
-    setSavedWebhooks(updated);
-    localStorage.setItem('errorScanWebhookPresets', JSON.stringify(updated));
-  };
-
   // Tester State
   const [testInputJson, setTestInputJson] = useState<string>(
     JSON.stringify(SAMPLE_USER_LOGS[1].log, null, 2)
@@ -473,7 +447,6 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
   const [newModel, setNewModel] = useState('claude-sonnet-4-6');
   const [newEndpoint, setNewEndpoint] = useState('/v1/messages');
   const [newSampleLog, setNewSampleLog] = useState('');
-  const [newFeishuUrl, setNewFeishuUrl] = useState('');
   const [newSeverity, setNewSeverity] = useState<'critical' | 'warning' | 'info'>('warning');
 
   // Handle Manual Scan Trigger
@@ -586,7 +559,7 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
       excludeUsers: '',
       filterMode: 'exclude',
       severity: analyzedResult.statusCode >= 500 ? 'critical' : 'warning',
-      feishuWebhookUrl: globalFeishuUrl,
+      feishuWebhookUrl: '',
       rawLogs: parsedLog ? [parsedLog] : [],
     };
 
@@ -792,7 +765,7 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
       excludeUsers: '',
       filterMode: 'exclude',
       severity: newSeverity,
-      feishuWebhookUrl: newFeishuUrl || globalFeishuUrl,
+      feishuWebhookUrl: '',
       rawLogs: [],
     });
 
@@ -801,7 +774,6 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
     setNewName('');
     setNewSubCategory('');
     setNewSampleLog('');
-    setNewFeishuUrl('');
     setNewSeverity('warning');
     onShowToast(`已成功添加错误扫描分类: "${newName}"`);
   };
@@ -1072,7 +1044,7 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
 
       {/* Global Configuration Bar: Scan & Alert Granularity Settings + Feishu Webhook */}
       <div className="bg-white border border-[#c3c6d7] rounded-xl p-5 shadow-2xs space-y-5">
-        {/* Feishu Bot Webhook Association Sub-Panel */}
+        {/* Feishu App 关联 Sub-Panel */}
         <div className="bg-gradient-to-r from-white via-[#f4f7ff] to-[#eeefff] border border-[#b4c5ff] rounded-xl p-4 shadow-2xs space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#c3c6d7]/60 pb-3">
             <div className="flex items-center gap-2.5">
@@ -1081,13 +1053,13 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
               </div>
               <div>
                 <h3 className="text-[15px] font-bold text-[#191c1e] flex items-center gap-2">
-                  告警通知关联 — 飞书 (Feishu / Lark) 机器人 Webhook 地址
+                  告警通知关联 — 飞书 (Feishu / Lark) 应用配置
                   <span className="text-[11px] font-semibold bg-[#004ac6] text-white px-2 py-0.5 rounded-full">
                     必填项
                   </span>
                 </h3>
                 <p className="text-[12px] text-[#434655]">
-                  当规则命中的错误日志达到设定阈值时，自动向指定的飞书机器人发送包含 HTTP 状态码、错误特征词、关联模型与 TraceID 的富文本卡片。
+                  配置飞书应用的 App ID / App Secret / Chat ID，当规则命中的错误日志达到设定阈值时，自动向指定群组发送包含 HTTP 状态码、错误特征词、关联模型与 TraceID 的富文本卡片。
                 </p>
               </div>
             </div>
@@ -1096,27 +1068,21 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (onBulkUpdateFeishuWebhookUrl) {
-                    onBulkUpdateFeishuWebhookUrl(globalFeishuUrl);
-                  } else {
-                    onShowToast(`已成功将飞书地址同步应用至全量 ${categories.length} 条分类规则！`);
+                  if (!feishuAppId || !feishuAppSecret || !feishuChatId) {
+                    onShowToast('请先填写完整的 App ID / App Secret / Chat ID');
+                    return;
                   }
-                }}
-                className="px-3.5 py-1.5 bg-[#004ac6] hover:bg-[#003ea8] text-white text-[12px] font-bold rounded-lg transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
-              >
-                <span className="material-symbols-outlined text-[16px]">sync</span>
-                一键同步覆盖全量规则 ({categories.length}条)
-              </button>
-
-              <button
-                type="button"
-                onClick={async () => {
-                  const result = await testErrorScanWebhook(globalFeishuUrl);
-                  if (result.success) {
-                    onShowToast('飞书测试消息发送成功！请检查飞书群是否收到消息');
-                  } else {
-                    onShowToast(`飞书测试失败: ${result.error || '未知错误'}`);
-                  }
+                  testErrorScanFeishuApp({
+                    app_id: feishuAppId,
+                    app_secret: feishuAppSecret,
+                    chat_id: feishuChatId,
+                  }).then((result) => {
+                    if (result.success) {
+                      onShowToast('飞书测试消息发送成功！请检查飞书群是否收到消息');
+                    } else {
+                      onShowToast(`飞书测试失败: ${result.error || '未知错误'}`);
+                    }
+                  });
                 }}
                 className="px-3.5 py-1.5 bg-white border border-[#c3c6d7] hover:border-[#004ac6] text-[#004ac6] text-[12px] font-bold rounded-lg transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer"
               >
@@ -1126,31 +1092,60 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
             </div>
           </div>
 
-          <div className="space-y-2 pt-1">
+          <div className="space-y-2.5 pt-1">
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+              <label className="text-[12px] font-semibold text-[#191c1e] sm:w-24 shrink-0">App ID</label>
               <div className="relative flex-1">
                 <span className="material-symbols-outlined absolute left-3 top-2.5 text-[18px] text-[#004ac6]">
                   link
                 </span>
                 <input
-                  type="url"
-                  required
-                  value={globalFeishuUrl}
-                  onChange={(e) => setGlobalFeishuUrl(e.target.value)}
-                  onBlur={() => {
-                    if (globalFeishuUrl) {
-                      setGlobalWebhookURL(globalFeishuUrl).catch(() => {});
-                    }
-                  }}
-                  placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..."
+                  type="text"
+                  value={feishuAppId}
+                  onChange={(e) => setFeishuAppId(e.target.value)}
+                  placeholder="cli_a2a29d91b7391bb4"
+                  className="w-full pl-9 pr-3.5 py-2 bg-white border border-[#c3c6d7] focus:border-[#004ac6] rounded-lg font-mono text-[12.5px] outline-none focus:ring-2 focus:ring-[#004ac6] text-[#191c1e] shadow-2xs"
+                />
+              </div>
+            </div>
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+              <label className="text-[12px] font-semibold text-[#191c1e] sm:w-24 shrink-0">App Secret</label>
+              <div className="relative flex-1">
+                <span className="material-symbols-outlined absolute left-3 top-2.5 text-[18px] text-[#004ac6]">
+                  lock
+                </span>
+                <input
+                  type="password"
+                  value={feishuAppSecret}
+                  onChange={(e) => setFeishuAppSecret(e.target.value)}
+                  placeholder="应用凭证 App Secret"
+                  className="w-full pl-9 pr-3.5 py-2 bg-white border border-[#c3c6d7] focus:border-[#004ac6] rounded-lg font-mono text-[12.5px] outline-none focus:ring-2 focus:ring-[#004ac6] text-[#191c1e] shadow-2xs"
+                />
+              </div>
+            </div>
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+              <label className="text-[12px] font-semibold text-[#191c1e] sm:w-24 shrink-0">Chat ID</label>
+              <div className="relative flex-1">
+                <span className="material-symbols-outlined absolute left-3 top-2.5 text-[18px] text-[#004ac6]">
+                  group
+                </span>
+                <input
+                  type="text"
+                  value={feishuChatId}
+                  onChange={(e) => setFeishuChatId(e.target.value)}
+                  placeholder="oc_084722efb807bc965f26f8544dc32cda9"
                   className="w-full pl-9 pr-3.5 py-2 bg-white border border-[#c3c6d7] focus:border-[#004ac6] rounded-lg font-mono text-[12.5px] outline-none focus:ring-2 focus:ring-[#004ac6] text-[#191c1e] shadow-2xs"
                 />
               </div>
               <button
                 type="button"
                 onClick={() => {
-                  setGlobalWebhookURL(globalFeishuUrl)
-                    .then(() => onShowToast('Webhook 地址已保存'))
+                  setFeishuAppConfig({
+                    app_id: feishuAppId,
+                    app_secret: feishuAppSecret,
+                    chat_id: feishuChatId,
+                  })
+                    .then(() => onShowToast('飞书应用配置已保存'))
                     .catch((err) => onShowToast(`保存失败: ${err.message}`));
                 }}
                 className="px-3 py-2 bg-[#004ac6] hover:bg-[#003ea8] text-white text-[12px] font-medium rounded-lg transition-colors whitespace-nowrap"
@@ -1158,45 +1153,9 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
                 保存
               </button>
             </div>
-
-            {/* Quick Presets */}
-            <div className="flex flex-wrap items-center gap-2 text-[11px] pt-0.5">
-              <span className="text-[#434655] font-semibold">快捷填充：</span>
-              {savedWebhooks.length === 0 ? (
-                <span className="text-[#737686] italic">暂无保存的 Webhook，点击右侧 + 保存当前地址</span>
-              ) : (
-                savedWebhooks.map((w) => (
-                  <span key={w.url} className="inline-flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setGlobalFeishuUrl(w.url)}
-                      className="px-2.5 py-1 bg-white border border-[#c3c6d7] hover:border-[#004ac6] text-[#191c1e] hover:text-[#004ac6] rounded-md font-medium transition-all shadow-2xs cursor-pointer"
-                    >
-                      {w.label}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeWebhookPreset(w.url)}
-                      className="text-[#ba1a1a] hover:text-red-500 text-[14px] leading-none"
-                      title="删除此预设"
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))
-              )}
-              <button
-                type="button"
-                onClick={() => {
-                  const label = prompt('请输入此 Webhook 的标签名（如：核心运维群）:');
-                  if (label) saveWebhookPreset(label, globalFeishuUrl);
-                }}
-                className="px-2 py-1 bg-[#d0e1fb] hover:bg-[#b4c5ff] text-[#003ea8] rounded-md font-bold text-[12px] transition-colors"
-                title="保存当前 Webhook 地址为快捷预设"
-              >
-                +
-              </button>
-            </div>
+            <p className="text-[11px] text-[#737686]">
+              应用需开通「以应用身份发消息」权限（im:message）并加入目标群组；Chat ID 为群组标识（oc_ 开头）。
+            </p>
 
             {/* Fallback Alert Toggle */}
             <div className="flex items-center justify-between pt-3 mt-2 border-t border-[#c3c6d7]/60">
@@ -1219,8 +1178,14 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
                     const newEnabled = !fallbackEnabled;
                     setFallbackEnabled(newEnabled);
                     try {
-                      await setFallbackConfig(newEnabled, newEnabled ? (fallbackWebhook || globalFeishuUrl) : fallbackWebhook);
-                      onShowToast(`兜底告警已${newEnabled ? '开启' : '关闭'}`);
+                      await setFallbackConfig(newEnabled, fallbackWebhook);
+                      onShowToast(
+                        newEnabled
+                          ? fallbackWebhook
+                            ? '兜底告警已开启（独立 Webhook 通道）'
+                            : '兜底告警已开启（飞书应用 app 模式）'
+                          : '兜底告警已关闭'
+                      );
                     } catch (err: any) {
                       setFallbackEnabled(!newEnabled);
                       onShowToast(`切换兜底告警失败: ${err.message}`);
@@ -1231,15 +1196,45 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
                 <div className="w-11 h-6 bg-[#e0e3e5] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-[#c3c6d7] after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#d97706]"></div>
               </label>
             </div>
-            {fallbackEnabled && fallbackWebhook && (
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-1 mt-2">
+            {/* 兜底告警独立 Webhook 地址（开关打开后显示；留空则走 app 模式默认告警） */}
+            {fallbackEnabled && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-2 mt-2">
                 <div className="flex items-center gap-1.5 text-[11px] text-amber-900">
                   <span className="material-symbols-outlined text-[14px]">link</span>
-                  <span className="font-semibold">兜底告警 Webhook:</span>
+                  <span className="font-semibold">
+                    兜底告警 Webhook 地址（可选，独立发送，不绑定 @用户）:
+                  </span>
                 </div>
-                <code className="block text-[11px] font-mono text-amber-800 bg-amber-100 px-2 py-1 rounded break-all">
-                  {fallbackWebhook}
-                </code>
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <input
+                    type="url"
+                    value={fallbackWebhook}
+                    onChange={(e) => setFallbackWebhook(e.target.value)}
+                    placeholder="留空则默认使用上方飞书应用（app 模式）发送兜底告警"
+                    className="flex-1 bg-white border border-amber-300 focus:border-amber-500 rounded-lg px-3 py-2 font-mono text-[11.5px] outline-none focus:ring-2 focus:ring-amber-400 text-amber-900"
+                  />
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await setFallbackConfig(fallbackEnabled, fallbackWebhook);
+                        onShowToast(
+                          fallbackWebhook
+                            ? '兜底告警 Webhook 已保存（独立通道发送）'
+                            : '已清空 Webhook，兜底告警将走飞书应用（app 模式）'
+                        );
+                      } catch (err: any) {
+                        onShowToast(`保存失败: ${err.message}`);
+                      }
+                    }}
+                    className="px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white text-[12px] font-medium rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    保存
+                  </button>
+                </div>
+                <p className="text-[11px] text-amber-800">
+                  填写后：兜底告警仅发送到此 Webhook 对应的群（不 @ 任何人）；留空：兜底告警按默认方式走上方飞书应用（app 模式）发送。
+                </p>
               </div>
             )}
           </div>
@@ -1272,7 +1267,7 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
             </button>
           </div>
           <p className="text-[11px] text-[#737686]">
-            输入飞书用户 ID（多个用逗号分隔），告警发送时会自动 @这些用户
+            输入飞书用户 open_id（多个用逗号分隔），告警卡片最底部会自动 @这些用户（兜底告警除外）
           </p>
           <input
             type="text"
@@ -1711,7 +1706,6 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
                 <th className="py-3 px-4">精细化错误子类与规则代码</th>
                 <th className="py-3 px-4">告警粒度</th>
                 <th className="py-3 px-4">排除 & 阈值设置</th>
-                <th className="py-3 px-4">关联飞书 Webhook 地址</th>
                 <th className="py-3 px-4 text-center">本周期错误计数</th>
                 <th className="py-3 px-4 text-center">标记是否告警</th>
                 <th className="py-3 px-4 text-right">操作管理</th>
@@ -1720,7 +1714,7 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
             <tbody className="divide-y divide-[#e0e3e5]">
               {filteredCategories.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-[#737686]">
+                  <td colSpan={7} className="py-8 text-center text-[#737686]">
                     未找到匹配条件下的错误日志分类记录
                   </td>
                 </tr>
@@ -1869,47 +1863,6 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
                         >
                           编辑阈值/排除
                         </button>
-                      </td>
-
-                      {/* Associated Feishu Webhook URL */}
-                      <td className="py-3.5 px-4 text-[12px] max-w-[210px]">
-                        <div className="flex flex-col gap-1">
-                          <div
-                            className="flex items-center gap-1.5 bg-[#eeefff] border border-[#b4c5ff] px-2 py-1 rounded text-[11px] font-mono text-[#004ac6] truncate"
-                            title={item.feishuWebhookUrl || globalFeishuUrl}
-                          >
-                            <span className="material-symbols-outlined text-[14px] shrink-0 text-[#004ac6]">
-                              chat
-                            </span>
-                            <span className="truncate">
-                              {item.feishuWebhookUrl || globalFeishuUrl}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingFeishuCategory(item);
-                                setEditingFeishuUrlInput(item.feishuWebhookUrl || globalFeishuUrl);
-                              }}
-                              className="text-[11px] font-bold text-[#004ac6] hover:underline flex items-center gap-0.5 cursor-pointer"
-                            >
-                              <span className="material-symbols-outlined text-[13px]">edit_note</span>
-                              修改飞书地址
-                            </button>
-                            <span className="text-[#c3c6d7]">|</span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                onShowToast(`🚀 成功向「${item.name}」关联的飞书机器人发送测试告警卡片！`);
-                              }}
-                              className="text-[11px] font-bold text-emerald-700 hover:underline flex items-center gap-0.5 cursor-pointer"
-                            >
-                              <span className="material-symbols-outlined text-[13px]">send</span>
-                              测试
-                            </button>
-                          </div>
-                        </div>
                       </td>
 
                       {/* Error Count */}
@@ -2317,18 +2270,6 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
                 </select>
               </div>
 
-              <div className="space-y-1">
-                <label className="font-semibold text-[#191c1e]">关联飞书 Webhook 地址 (可选)</label>
-                <input
-                  type="url"
-                  value={newFeishuUrl}
-                  onChange={(e) => setNewFeishuUrl(e.target.value)}
-                  placeholder={globalFeishuUrl}
-                  className="w-full bg-white border border-[#c3c6d7] rounded-lg px-3 py-2 font-mono text-[12px] outline-none focus:ring-2 focus:ring-[#004ac6]"
-                />
-                <p className="text-[11px] text-[#737686]">留空则默认使用全局飞书告警 Webhook 地址。</p>
-              </div>
-
               <div className="pt-2 flex justify-end gap-2 border-t border-[#e0e3e5]">
                 <button
                   type="button"
@@ -2345,76 +2286,6 @@ export const ErrorScanAlertsView: React.FC<ErrorScanAlertsViewProps> = ({
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* Edit Single Category Feishu Webhook Modal */}
-      {editingFeishuCategory && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#2d3133]/50 backdrop-blur-xs p-4 overflow-y-auto">
-          <div className="bg-white w-full max-w-lg rounded-xl shadow-2xl border border-[#c3c6d7] overflow-hidden animate-scale-in">
-            <div className="px-6 py-4 border-b border-[#c3c6d7] flex justify-between items-center bg-[#f2f4f6]">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-[#004ac6]">chat</span>
-                <h3 className="text-[16px] font-bold text-[#191c1e]">
-                  修改规则关联的飞书 Webhook 地址
-                </h3>
-              </div>
-              <button
-                onClick={() => setEditingFeishuCategory(null)}
-                className="text-[#434655] hover:text-[#191c1e]"
-              >
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </div>
-
-            <div className="p-6 space-y-4">
-              <div className="bg-[#eeefff] p-3 rounded-lg text-[12px] space-y-1 border border-[#b4c5ff]">
-                <div className="font-bold text-[#004ac6]">{editingFeishuCategory.name}</div>
-                <div className="text-[#434655] font-mono text-[11px]">
-                  编码: {editingFeishuCategory.code} | 分类: {editingFeishuCategory.subCategory}
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-[13px] font-semibold text-[#191c1e]">
-                  飞书机器人 Webhook 地址 (URL) *
-                </label>
-                <input
-                  type="url"
-                  required
-                  value={editingFeishuUrlInput}
-                  onChange={(e) => setEditingFeishuUrlInput(e.target.value)}
-                  placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxxx"
-                  className="w-full bg-white border border-[#c3c6d7] rounded-lg px-3.5 py-2 font-mono text-[12px] outline-none focus:ring-2 focus:ring-[#004ac6]"
-                />
-                <p className="text-[11px] text-[#737686]">
-                  在飞书群组设置 -&gt; 群机器人 -&gt; 添加自定义机器人 -&gt; 复制 Webhook 地址粘贴至此处。
-                </p>
-              </div>
-
-              <div className="pt-3 border-t border-[#e0e3e5] flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setEditingFeishuCategory(null)}
-                  className="px-4 py-2 text-[#434655] text-[13px] font-medium hover:bg-[#e0e3e5] rounded-lg"
-                >
-                  取消
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (onUpdateFeishuWebhookUrl) {
-                      onUpdateFeishuWebhookUrl(editingFeishuCategory.id, editingFeishuUrlInput);
-                    }
-                    setEditingFeishuCategory(null);
-                  }}
-                  className="px-5 py-2 bg-[#004ac6] text-white text-[13px] font-medium rounded-lg hover:opacity-90 shadow-2xs"
-                >
-                  保存飞书地址关联
-                </button>
-              </div>
-            </div>
           </div>
         </div>
       )}
